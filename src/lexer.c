@@ -15,16 +15,16 @@ void riven_warn(int line, const char *fmt, ...) {
 }
 
 /* ===== NODELIST ===== */
-void nodelist_init(NodeList *l) { l->items = NULL; l->count = 0; l->capacity = 0; }
+void nodelist_init(NodeList *l) { l->items = NULL; l->count = 0; l->cap = 0; }
 void nodelist_push(NodeList *l, ASTNode *n) {
-    if (l->count >= l->capacity) {
-        l->capacity = l->capacity ? l->capacity * 2 : 8;
-        l->items = realloc(l->items, sizeof(ASTNode *) * l->capacity);
+    if (l->count >= l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 8;
+        l->items = realloc(l->items, sizeof(ASTNode *) * l->cap);
     }
     l->items[l->count++] = n;
 }
 ASTNode *nodelist_get(NodeList *l, int i) { return (i >= 0 && i < l->count) ? l->items[i] : NULL; }
-void nodelist_free(NodeList *l) { free(l->items); l->items = NULL; l->count = l->capacity = 0; }
+void nodelist_free(NodeList *l) { free(l->items); l->items = NULL; l->count = l->cap = 0; }
 
 /* ===== LEXER ===== */
 Lexer *lexer_new(const char *src) {
