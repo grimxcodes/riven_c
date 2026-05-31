@@ -1,0 +1,16 @@
+~~ system.rvh — Riven standard system header
+~~ Import with: consistof "system.rvh"
+~~ Provides: OS utilities, platform constants
+
+firm OS_LINUX    = 1
+firm OS_WINDOWS  = 2
+firm OS_MAC      = 3
+firm CURRENT_OS  = 1
+
+craft platform() {
+    returns "linux"
+}
+
+craft timestamp() {
+    returns time_now()
+}
