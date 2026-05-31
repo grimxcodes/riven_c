@@ -1,0 +1,4 @@
+~~ Hello World in Riven
+riven core {
+    stamp("Hello, Riven!")
+}
