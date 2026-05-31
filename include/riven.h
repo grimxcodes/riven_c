@@ -12,18 +12,16 @@
 #include <pthread.h>
 
 /* ===================== VERSION ===================== */
-#define RIVEN_VERSION  "1.1.0"
-#define MAX_TOKENS     65536
-#define MAX_NODES      65536
-#define MAX_IDENT_LEN  256
-#define MAX_STR_LEN    4096
-#define MAX_SCOPE      256
-#define MAX_VARS       4096
-#define MAX_FRAMES     128
-#define MAX_CALL_STACK 512
-#define MAX_ARGS       64
-#define MAX_COLL_SIZE  65536
+#define RIVEN_VERSION   "1.2.0"
+#define MAX_TOKENS      65536
+#define MAX_IDENT_LEN   256
+#define MAX_STR_LEN     4096
+#define MAX_VARS        4096
+#define MAX_FRAMES      128
+#define MAX_ARGS        64
+#define MAX_COLL_SIZE   65536
 #define MAX_SPARK_TASKS 256
+#define MAX_IMPORTS     256
 
 /* ===================== TOKEN TYPES ===================== */
 typedef enum {
@@ -49,20 +47,16 @@ typedef enum {
     TOK_DOT, TOK_COMMA, TOK_COLON, TOK_SEMICOLON,
     TOK_LBRACE, TOK_RBRACE, TOK_LPAREN, TOK_RPAREN,
     TOK_LBRACKET, TOK_RBRACKET,
-    TOK_TILDE_TILDE,
-    TOK_EOF,
-    TOK_UNKNOWN
+    TOK_EOF, TOK_UNKNOWN
 } TokenType;
 
-/* ===================== TOKEN ===================== */
 typedef struct {
-    TokenType   type;
-    char        value[MAX_STR_LEN];
-    int         line;
-    int         col;
+    TokenType type;
+    char      value[MAX_STR_LEN];
+    int       line, col;
 } Token;
 
-/* ===================== AST NODE TYPES ===================== */
+/* ===================== AST ===================== */
 typedef enum {
     NODE_PROGRAM, NODE_BLOCK,
     NODE_ASSIGN, NODE_FIRM,
@@ -70,30 +64,30 @@ typedef enum {
     NODE_CRAFT, NODE_RETURN, NODE_CALL,
     NODE_STAMP, NODE_GRAB, NODE_FETCH,
     NODE_FRAME, NODE_SPAWN,
-    NODE_MEMBER_ACCESS, NODE_INDEX,
+    NODE_MEMBER_ACCESS, NODE_MEMBER_ASSIGN,
+    NODE_INDEX, NODE_INDEX_ASSIGN,
     NODE_COLL_LITERAL, NODE_REC_LITERAL,
     NODE_INC, NODE_DEC, NODE_RISE, NODE_DROP,
     NODE_BINOP, NODE_UNOP,
     NODE_IDENT,
     NODE_INT_LIT, NODE_DNUM_LIT, NODE_STR_LIT, NODE_BOOL_LIT, NODE_NULL_LIT,
     NODE_CONSISTOF, NODE_RESC, NODE_ATTACK,
-    NODE_SPARK, NODE_SYNC, NODE_RAW,
+    NODE_SPARK_DEF, NODE_SYNC, NODE_RAW,
     NODE_CAST,
     NODE_PTR, NODE_REF, NODE_BIND,
 } NodeType;
 
-/* ===================== AST NODE ===================== */
 typedef struct ASTNode ASTNode;
-typedef struct { ASTNode **items; int count; int capacity; } NodeList;
+typedef struct { ASTNode **items; int count; int cap; } NodeList;
 
 struct ASTNode {
     NodeType type;
     int      line;
     union {
-        long long  ival;
-        double     dval;
-        char       sval[MAX_STR_LEN];
-        int        bval;
+        long long ival;
+        double    dval;
+        char      sval[MAX_STR_LEN];
+        int       bval;
         struct { ASTNode *left; ASTNode *right; char op[8]; }  binop;
         struct { ASTNode *operand; char op[8]; }               unop;
         struct { char name[MAX_IDENT_LEN]; ASTNode *value; int is_firm; } assign;
@@ -112,8 +106,14 @@ struct ASTNode {
         struct { NodeList stmts; } block;
         struct { char name[MAX_IDENT_LEN]; NodeList members; } frame;
         struct { char frame_name[MAX_IDENT_LEN]; ASTNode *args[MAX_ARGS]; int arg_count; } spawn;
+        /* member read: obj.field */
         struct { ASTNode *obj; char member[MAX_IDENT_LEN]; } member;
+        /* member write: obj.field = val */
+        struct { ASTNode *obj; char member[MAX_IDENT_LEN]; ASTNode *value; } member_assign;
+        /* index read: obj[idx] */
         struct { ASTNode *obj; ASTNode *idx; } index;
+        /* index write: obj[idx] = val */
+        struct { ASTNode *obj; ASTNode *idx; ASTNode *value; } index_assign;
         struct { NodeList items; } coll;
         struct { char keys[MAX_ARGS][MAX_IDENT_LEN]; ASTNode *vals[MAX_ARGS]; int count; } rec;
         struct { char name[MAX_IDENT_LEN]; } incdec;
@@ -126,7 +126,6 @@ struct ASTNode {
         struct { char path[MAX_STR_LEN]; } consistof;
         struct { char target_type[32]; ASTNode *value; } cast;
         struct { char name[MAX_IDENT_LEN]; ASTNode *value; } refptr;
-        struct { int dummy; } sync_stmt;
     };
 };
 
@@ -135,32 +134,31 @@ typedef enum {
     VAL_INT, VAL_DNUM, VAL_STRING, VAL_BOOL, VAL_NULL,
     VAL_COLL, VAL_RECORD, VAL_FUNCTION, VAL_FRAME_OBJ,
     VAL_NATIVE_FN, VAL_ERROR,
-    VAL_REF,   /* mutable heap cell — true alias */
-    VAL_PTR,   /* raw pointer with address + tag    */
+    VAL_REF,   /* shared mutable box — true alias */
+    VAL_PTR,   /* safe pointer to a RivenValue */
 } ValueType;
 
 typedef struct RivenValue RivenValue;
+
 typedef struct {
     char       **keys;
     RivenValue **vals;
-    int          count;
-    int          capacity;
+    int          count, cap;
 } RecordMap;
 
 typedef RivenValue *(*NativeFn)(RivenValue **args, int argc);
 
-/* ----- Ref box: a single heap cell shared by aliases ----- */
+/* Shared mutable cell for ref aliasing */
 typedef struct RivenBox {
-    RivenValue *value;     /* the actual value */
-    int         ref_count; /* how many VAL_REF values point here */
+    RivenValue *value;
+    int         ref_count;
 } RivenBox;
 
-/* ----- Raw pointer descriptor ----- */
+/* Safe pointer — points to a RivenValue* slot, never a raw C address */
 typedef struct {
-    uintptr_t   address;          /* actual address (0 for named symbols) */
-    char        tag[MAX_IDENT_LEN]; /* symbolic name e.g. "kernel", "heap" */
-    int         is_valid;         /* bounds/lifetime check */
-    size_t      size;             /* byte width (0 = unknown) */
+    RivenValue **slot;     /* pointer to the env slot holding the value */
+    char         tag[MAX_IDENT_LEN];
+    int          is_valid;
 } RivenPtr;
 
 struct RivenValue {
@@ -171,7 +169,7 @@ struct RivenValue {
         double      dval;
         char       *sval;
         int         bval;
-        struct { RivenValue **items; int count; int capacity; } coll;
+        struct { RivenValue **items; int count; int cap; } coll;
         RecordMap   record;
         struct {
             char     name[MAX_IDENT_LEN];
@@ -185,43 +183,35 @@ struct RivenValue {
             char      frame_name[MAX_IDENT_LEN];
             RecordMap fields;
             RecordMap methods;
-            /* access control bitmask: keys listed as open/hidden */
-            char      open_methods[MAX_ARGS][MAX_IDENT_LEN];
-            int       open_method_count;
         } frame_obj;
-        NativeFn    native_fn;
-        char       *error_msg;
-        RivenBox   *box;   /* VAL_REF  — shared mutable cell */
-        RivenPtr    ptr;   /* VAL_PTR  — raw pointer struct  */
+        NativeFn   native_fn;
+        char      *error_msg;
+        RivenBox  *box;   /* VAL_REF */
+        RivenPtr   ptr;   /* VAL_PTR */
     };
 };
 
 /* ===================== FRAME DEFINITION ===================== */
-/* Stored in the interpreter's frame table, carries access metadata */
 typedef struct {
-    char     name[MAX_IDENT_LEN];
-    RecordMap fields;           /* default field values  */
-    RecordMap methods;          /* VAL_FUNCTION entries  */
-    /* access: 1 = open (public), 0 = hidden (private) */
-    char     method_names[MAX_ARGS][MAX_IDENT_LEN];
-    int      method_access[MAX_ARGS];  /* 1=open, 0=hidden */
-    int      method_count;
-    char     field_names[MAX_ARGS][MAX_IDENT_LEN];
-    int      field_access[MAX_ARGS];
-    int      field_count;
-    /* boot param names (supports parameterised constructor) */
-    char     boot_params[MAX_ARGS][MAX_IDENT_LEN];
-    int      boot_param_count;
+    char      name[MAX_IDENT_LEN];
+    RecordMap fields;   /* default field values */
+    RecordMap methods;  /* VAL_FUNCTION entries  */
+    char      member_names[MAX_ARGS*2][MAX_IDENT_LEN];
+    int       member_is_method[MAX_ARGS*2]; /* 1=method, 0=field */
+    int       member_access[MAX_ARGS*2];    /* 1=open, 0=hidden  */
+    int       member_count;
+    char      boot_params[MAX_ARGS][MAX_IDENT_LEN];
+    int       boot_param_count;
 } FrameDef;
 
 /* ===================== SPARK TASK ===================== */
-typedef struct SparkTask {
-    RivenValue    *fn;       /* borrowed ref – must retain */
+typedef struct {
+    RivenValue    *fn;
     RivenValue    *args[MAX_ARGS];
     int            arg_count;
     pthread_t      thread;
-    RivenValue    *result;   /* written when done */
-    int            done;     /* atomic-ish flag   */
+    RivenValue    *result;
+    volatile int   done;
     pthread_mutex_t lock;
 } SparkTask;
 
@@ -230,49 +220,62 @@ typedef struct Env Env;
 struct Env {
     char        names[MAX_VARS][MAX_IDENT_LEN];
     RivenValue *values[MAX_VARS];
-    int         count;
     int         firm[MAX_VARS];
+    int         count;
     Env        *parent;
 };
 
-/* ===================== LEXER ===================== */
+/* ===================== LEXER / PARSER ===================== */
 typedef struct {
     const char *src;
-    int         pos, line, col;
-    Token       tokens[MAX_TOKENS];
-    int         token_count;
+    int pos, line, col;
+    Token      *tokens;
+    int         token_count, token_cap;
 } Lexer;
 
-/* ===================== PARSER ===================== */
 typedef struct { Token *tokens; int count; int pos; } Parser;
 
 /* ===================== INTERPRETER ===================== */
 typedef struct {
-    Env        *global_env;
-    /* Frame definitions keyed by name */
-    FrameDef   *frame_defs[MAX_FRAMES];
-    int         frame_def_count;
-    /* Spark task registry */
-    SparkTask  *spark_tasks[MAX_SPARK_TASKS];
-    int         spark_task_count;
+    Env       *global_env;
+    FrameDef  *frame_defs[MAX_FRAMES];
+    int        frame_def_count;
+    SparkTask *spark_tasks[MAX_SPARK_TASKS];
+    int        spark_task_count;
     pthread_mutex_t spark_lock;
+    /* Import cache: resolved absolute paths */
+    char       imported[MAX_IMPORTS][MAX_STR_LEN];
+    int        import_count;
+    /* AST registry: keep all parsed ASTs alive until interpreter is freed */
+    ASTNode   *ast_registry[MAX_IMPORTS + 1];
+    char      *src_registry[MAX_IMPORTS + 1]; /* heap-allocated source strings */
+    Lexer     *lex_registry[MAX_IMPORTS + 1];
+    Parser    *par_registry[MAX_IMPORTS + 1];
+    int        ast_count;
+    /* Current file path for relative imports */
+    char       current_file[MAX_STR_LEN];
     /* Control flow */
-    int         in_function;
-    int         in_loop;
-    int         raw_mode;         /* 0=safe, 1=raw/unsafe */
+    int        in_function;
+    int        in_loop;
+    int        raw_mode;
     RivenValue *return_val;
     RivenValue *thrown_error;
     int         has_error;
 } Interpreter;
 
-/* ===================== CONTROL FLOW SIGNALS ===================== */
+/* ===================== SIGNALS ===================== */
 typedef enum {
     SIGNAL_NONE, SIGNAL_RETURN, SIGNAL_BREAK, SIGNAL_CONTINUE, SIGNAL_ERROR,
 } Signal;
 
 extern Signal g_signal;
 
-/* ===================== FUNCTION PROTOTYPES ===================== */
+/* ===================== PROTOTYPES ===================== */
+
+/* NodeList */
+void     nl_init(NodeList *l);
+void     nl_push(NodeList *l, ASTNode *n);
+void     nl_free(NodeList *l);
 
 /* Lexer */
 Lexer   *lexer_new(const char *src);
@@ -288,8 +291,7 @@ void     ast_free(ASTNode *node);
 void     ast_print(ASTNode *node, int indent);
 
 /* Values */
-RivenValue *val_alloc_pub(ValueType type);   /* allocate raw value cell   */
-RivenValue *val_alias_ref(RivenValue *src);  /* alias an existing ref box */
+RivenValue *val_alloc_pub(ValueType type);
 RivenValue *val_int(long long i);
 RivenValue *val_dnum(double d);
 RivenValue *val_string(const char *s);
@@ -297,33 +299,51 @@ RivenValue *val_bool(int b);
 RivenValue *val_null(void);
 RivenValue *val_error(const char *msg);
 RivenValue *val_coll_empty(void);
-void        val_coll_push(RivenValue *coll, RivenValue *item);
+void        val_coll_push(RivenValue *c, RivenValue *item);
 RivenValue *val_record_empty(void);
-void        val_record_set(RivenValue *rec, const char *key, RivenValue *val);
-RivenValue *val_record_get(RivenValue *rec, const char *key);
-RivenValue *val_make_ref(RivenValue *initial);   /* NEW: create a ref box */
-RivenValue *val_ref_get(RivenValue *ref);         /* NEW: dereference       */
-void        val_ref_set(RivenValue *ref, RivenValue *v); /* NEW: write through */
-RivenValue *val_make_ptr(uintptr_t addr, const char *tag, size_t sz); /* NEW */
+void        val_record_set(RivenValue *r, const char *k, RivenValue *v);
+RivenValue *val_record_get(RivenValue *r, const char *k);
+/* Ref */
+RivenValue *val_make_ref(RivenValue *initial);
+RivenValue *val_alias_ref(RivenValue *src);
+RivenValue *val_ref_get(RivenValue *ref);
+void        val_ref_set(RivenValue *ref, RivenValue *v);
+/* Ptr — safe, points to env slot */
+RivenValue *val_make_ptr(RivenValue **slot, const char *tag);
+/* Deref transparent read */
+RivenValue *val_deref(RivenValue *v);
+/* Lifecycle */
 void        val_retain(RivenValue *v);
 void        val_release(RivenValue *v);
+/* Helpers */
 char       *val_to_string(RivenValue *v);
 int         val_truthy(RivenValue *v);
-RivenValue *val_copy(RivenValue *v);
+RivenValue *val_copy_deep(RivenValue *v);
 void        val_print(RivenValue *v);
 int         val_equal(RivenValue *a, RivenValue *b);
-RivenValue *val_deref(RivenValue *v); /* auto-deref VAL_REF when reading */
+
+/* RecordMap */
+void        record_init(RecordMap *m);
+void        record_set(RecordMap *m, const char *key, RivenValue *val);
+RivenValue *record_get(RecordMap *m, const char *key);
+void        record_free(RecordMap *m);
 
 /* Environment */
 Env        *env_new(Env *parent);
 void        env_free(Env *e);
 RivenValue *env_get(Env *e, const char *name);
+RivenValue **env_slot(Env *e, const char *name); /* get pointer to slot */
 void        env_set(Env *e, const char *name, RivenValue *val, int firm);
 void        env_update(Env *e, const char *name, RivenValue *val);
 int         env_exists(Env *e, const char *name);
-int         env_is_firm(Env *e, const char *name);
-/* NEW: write through a ref-typed variable */
-void        env_ref_write(Env *e, const char *name, RivenValue *val);
+
+/* FrameDef */
+FrameDef   *framedef_new(const char *name);
+void        framedef_free(FrameDef *fd);
+void        framedef_reg_member(FrameDef *fd, const char *bare, int is_method, int is_open);
+int         framedef_access(FrameDef *fd, const char *bare, int is_method);
+FrameDef   *interp_find_frame(Interpreter *interp, const char *name);
+void        interp_add_frame(Interpreter *interp, FrameDef *fd);
 
 /* Interpreter */
 Interpreter *interp_new(void);
@@ -332,33 +352,11 @@ RivenValue  *interp_exec(Interpreter *interp, ASTNode *node, Env *env);
 void         interp_run_file(Interpreter *interp, const char *path);
 void         interp_register_natives(Interpreter *interp, Env *env);
 
-/* Frame definitions */
-FrameDef   *framedef_new(const char *name);
-void        framedef_free(FrameDef *fd);
-FrameDef   *interp_find_frame(Interpreter *interp, const char *name);
-void        interp_add_frame(Interpreter *interp, FrameDef *fd);
-
-/* RecordMap helpers */
-void        record_init(RecordMap *m);
-void        record_set(RecordMap *m, const char *key, RivenValue *val);
-RivenValue *record_get(RecordMap *m, const char *key);
-void        record_free(RecordMap *m);
-
-/* NodeList helpers */
-void     nodelist_init(NodeList *l);
-void     nodelist_push(NodeList *l, ASTNode *n);
-ASTNode *nodelist_get(NodeList *l, int i);
-void     nodelist_free(NodeList *l);
-
-/* Error helpers */
-void riven_error(int line, const char *fmt, ...);
-void riven_warn(int line, const char *fmt, ...);
-
-/* Native stdlib */
+/* Stdlib */
 void stdlib_register(Env *env);
 
-/* Raw mode built-ins */
-RivenValue *raw_read_mem(uintptr_t addr, size_t sz);
-void        raw_write_mem(uintptr_t addr, size_t sz, uint64_t val);
+/* Errors */
+void riven_error(int line, const char *fmt, ...);
+void riven_warn(int line, const char *fmt, ...);
 
 #endif /* RIVEN_H */
