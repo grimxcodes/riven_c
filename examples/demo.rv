@@ -1,0 +1,85 @@
+~~ Full Riven Language Demo
+consistof "system.rvh"
+
+firm VERSION = 1.0
+
+frame User {
+    hidden password = "secret"
+    open name = "Guest"
+
+    boot(n) {
+        self.name = n
+        stamp("User {} created", self.name)
+    }
+
+    open craft greet() {
+        stamp("Hello, I am {}", self.name)
+    }
+
+    hidden craft get_password() {
+        returns self.password
+    }
+}
+
+spark craft bg_task(id) {
+    stamp("Background task {} running", id)
+}
+
+riven core {
+    ~~ Variables
+    score = 0
+    firm MAX = 100
+
+    ~~ Collections
+    nums = [1, 2, 3, 4, 5]
+    push(nums, 6)
+    stamp("nums: {}", nums)
+
+    ~~ Loops
+    flow 3 {
+        rise score
+    }
+    stamp("Score after flow: {}", score)
+
+    ~~ While loop
+    x = 0
+    during x < 5 {
+        x+>
+    }
+    stamp("x after during: {}", x)
+
+    ~~ Functions
+    craft add(a, b) {
+        returns a + b
+    }
+    result = add(10, 20)
+    stamp("10 + 20 = {}", result)
+
+    ~~ OOP
+    u = spawn User("Ansh")
+    u.greet()
+
+    ~~ Error handling
+    resc {
+        attack("Test error")
+    }
+    stamp("Error was caught safely")
+
+    ~~ Ref aliasing
+    val = 42
+    ref alias = val
+    alias = 99
+    stamp("val after alias write: {}", val)
+
+    ~~ Async
+    handle = bg_task(1)
+    stamp("Main continues while spark runs")
+    sync
+    stamp("All sparks done")
+
+    ~~ Type casting
+    n = "123"
+    stamp("String to int: {}", int(n) + 1)
+
+    stamp("Demo complete!")
+}
