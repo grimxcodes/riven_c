@@ -381,19 +381,3 @@ void env_update(Env *e, const char *name, RivenValue *val) {
 }
 
 /* ========================= ERROR HELPERS ========================= */
-Signal g_signal = SIGNAL_NONE;
-
-void riven_error(int line, const char *fmt, ...) {
-    fprintf(stderr,"\033[1;31m[RIVEN ERROR]");
-    if (line>0) fprintf(stderr," Line %d:",line);
-    fprintf(stderr," \033[0m");
-    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
-    fprintf(stderr,"\n");
-}
-void riven_warn(int line, const char *fmt, ...) {
-    fprintf(stderr,"\033[1;33m[RIVEN WARN]");
-    if (line>0) fprintf(stderr," Line %d:",line);
-    fprintf(stderr," \033[0m");
-    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
-    fprintf(stderr,"\n");
-}
