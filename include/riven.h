@@ -359,4 +359,10 @@ void stdlib_register(Env *env);
 void riven_error(int line, const char *fmt, ...);
 void riven_warn(int line, const char *fmt, ...);
 
+
+void nodelist_init(NodeList *l);
+void nodelist_push(NodeList *l, ASTNode *n);
+ASTNode *nodelist_get(NodeList *l, int i);
+void nodelist_free(NodeList *l);
+
 #endif /* RIVEN_H */
